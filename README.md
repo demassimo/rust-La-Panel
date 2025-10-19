@@ -8,6 +8,8 @@ Features:
 - **Install Rust** via SteamCMD (first-time bootstrap)
 - **Update Rust** via SteamCMD
 - **Install/Update Oxide/uMod** from a provided ZIP URL (or Carbon if you supply its URL)
+- Optional toggle to auto-run a Rust download before Oxide installs
+- Web configuration page to adjust service paths and script settings
 
 ## Paths & assumptions
 - Steam user: `steam`
@@ -15,7 +17,7 @@ Features:
 - Rust server dir: `/home/steam/rust-server`
 - Systemd service name: `rust-server`
 
-You can change these in the helper scripts under `scripts/` or via env vars used by the service.
+You can change these in the helper scripts under `scripts/`, via the new web configuration page, or with env vars used by the service.
 
 ## Install
 
