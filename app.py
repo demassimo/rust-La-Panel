@@ -1,7 +1,8 @@
 import json
-import os, subprocess, contextlib
+import os, subprocess, contextlib, tarfile, shutil, time
 from pathlib import Path
 from threading import Lock
+from datetime import datetime
 
 from functools import wraps
 from flask import Flask, Response, request, jsonify, render_template, redirect, url_for, session
@@ -30,6 +31,9 @@ DEFAULT_CONFIG = {
 }
 
 _CONFIG_LOCK = Lock()
+
+BACKUP_DIR_NAME = "backups"
+_BACKUP_ALLOWED = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 
 def _load_config_file() -> dict:
     cfg = dict(DEFAULT_CONFIG)
@@ -203,6 +207,7 @@ def index():
         token_set=bool(AUTH_TOKEN),
         file_root=str(FILE_ROOT),
         auto_download=cfg["auto_download_rust_with_oxide"],
+        backups_path='/' + BACKUP_DIR_NAME,
     )
 
 
@@ -366,11 +371,190 @@ def api_update_config():
         return jsonify({"ok": False, "error": str(exc)}), 400
     return jsonify({"ok": True, "config": cfg})
 
+
+@app.get("/api/metrics")
+def api_metrics():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except OSError:
+        load1 = load5 = load15 = 0.0
+
+    metrics = {
+        "ok": True,
+        "load": {"1": load1, "5": load5, "15": load15},
+        "memory": _memory_usage(),
+        "disk": _disk_usage(FILE_ROOT),
+    }
+    return jsonify(metrics)
+
+
+@app.get("/api/backups")
+def api_list_backups():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    backups = _list_backups()
+    return jsonify({"ok": True, "backups": backups, "path": _relative(_ensure_backup_dir())})
+
+
+@app.post("/api/backups")
+def api_create_backup():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    label = data.get("label") if isinstance(data, dict) else None
+    backup_dir = _ensure_backup_dir()
+    name = _new_backup_name(label if isinstance(label, str) else None)
+    target = backup_dir / name
+    counter = 1
+    while target.exists():
+        target = backup_dir / f"{name[:-7]}-{counter}.tar.gz"
+        counter += 1
+
+    try:
+        _create_backup_archive(target)
+        created = time.time()
+        stat = target.stat()
+    except (OSError, tarfile.TarError) as exc:
+        with contextlib.suppress(OSError):
+            if target.exists():
+                target.unlink()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "backup": {
+                "name": target.name,
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+                "created": created,
+            },
+        }
+    )
+
+
+@app.delete("/api/backups/<name>")
+def api_delete_backup(name: str):
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        path = _backup_file_path(name)
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid name"}), 400
+
+    if not path.exists() or not path.is_file():
+        return jsonify({"ok": False, "error": "not found"}), 404
+
+    try:
+        path.unlink()
+    except OSError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify({"ok": True})
+
 # --- File manager ---
 BANNED_EXTS = {".dll", ".exe", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".svg",
 ".dds", ".tga", ".psd", ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".avi", ".mov", ".mkv", ".pak",
 ".bin", ".dat"
 }
+
+def _memory_usage() -> dict:
+    total = available = used = 0
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8", errors="ignore") as fh:
+            data = {}
+            for line in fh:
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                parts = value.strip().split()
+                if not parts:
+                    continue
+                data[key] = int(parts[0]) * 1024  # values are in kB
+        total = data.get("MemTotal", 0)
+        available = data.get("MemAvailable", data.get("MemFree", 0))
+        used = total - available if total and available else 0
+    except OSError:
+        pass
+    percent = (used / total * 100) if total else 0
+    return {"total": total, "used": used, "available": available, "percent": percent}
+
+
+def _disk_usage(root: Path) -> dict:
+    try:
+        usage = shutil.disk_usage(root)
+    except OSError:
+        return {"total": 0, "used": 0, "free": 0, "percent": 0}
+    used = usage.total - usage.free
+    percent = (used / usage.total * 100) if usage.total else 0
+    return {"total": usage.total, "used": used, "free": usage.free, "percent": percent}
+
+
+def _ensure_backup_dir() -> Path:
+    target = _safe_path(BACKUP_DIR_NAME)
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _backup_file_path(name: str) -> Path:
+    if not name or any(ch not in _BACKUP_ALLOWED for ch in name):
+        raise ValueError("invalid name")
+    if not name.endswith(".tar.gz"):
+        raise ValueError("invalid name")
+    return _safe_path(f"{BACKUP_DIR_NAME}/{name}")
+
+
+def _sanitize_backup_slug(label: str | None) -> str:
+    if not label:
+        return ""
+    slug = "".join(ch for ch in label if ch in _BACKUP_ALLOWED and ch not in {"."})
+    return slug.strip("-_")[:48]
+
+
+def _new_backup_name(label: str | None = None) -> str:
+    base = datetime.utcnow().strftime("backup-%Y%m%d-%H%M%S")
+    slug = _sanitize_backup_slug(label)
+    if slug:
+        base = f"{base}-{slug}"
+    return f"{base}.tar.gz"
+
+
+def _create_backup_archive(destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    def _filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        parts = [p for p in Path(info.name).parts if p not in {"."}]
+        if parts and parts[0] == BACKUP_DIR_NAME:
+            return None
+        return info
+
+    with tarfile.open(destination, "w:gz") as tar:
+        tar.add(FILE_ROOT, arcname=".", filter=_filter)
+
+
+def _list_backups() -> list[dict]:
+    backup_dir = _ensure_backup_dir()
+    backups = []
+    try:
+        entries = sorted(backup_dir.glob("*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return backups
+
+    for path in entries:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        backups.append(
+            {
+                "name": path.name,
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+            }
+        )
+    return backups
 
 @app.get("/api/fs/list")
 def fs_list():

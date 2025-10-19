@@ -65,6 +65,20 @@ max-height:68vh; overflow:auto; padding:14px}
 label{font-size:12px;color:var(--muted)}
 .input-inline{width:110px}
 
+.metrics-card .body{display:flex;flex-direction:column;gap:12px}
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.stat{padding:12px;border-radius:12px;background:#0d121b;border:1px solid rgba(255,255,255,.06)}
+.stat strong{display:block;margin-bottom:4px;font-size:13px;color:#e6edf3}
+.stat span{font-size:13px;color:var(--muted)}
+.metrics-status{font-size:12px;color:var(--muted)}
+.metrics-status.error{color:#fca5a5}
+.backup-actions{display:flex;gap:10px;flex-wrap:wrap}
+.backup-list{display:flex;flex-direction:column;gap:8px}
+.backup-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-radius:12px;background:#0d121b;border:1px solid rgba(255,255,255,.06);flex-wrap:wrap}
+.backup-item .meta{display:flex;flex-direction:column;font-size:12px;color:var(--muted)}
+.backup-item .meta strong{color:#e6edf3;font-size:13px}
+.backup-empty{padding:12px;border-radius:12px;background:#0d121b;border:1px solid rgba(255,255,255,.05);color:var(--muted);font-size:13px;text-align:center}
+
 .toggle-line{display:flex;align-items:center;gap:12px;margin-top:8px;padding:10px 12px;background:#0d121b;border:1px solid rgba(255,255,255,.06);border-radius:12px}
 .toggle-line input[type="checkbox"]{appearance:none;position:relative;width:44px;height:24px;border-radius:999px;background:#1f2937;border:1px solid rgba(255,255,255,.12);transition:background .2s ease, border-color .2s ease;cursor:pointer}
 .toggle-line input[type="checkbox"]::after{content:"";position:absolute;top:2px;left:3px;width:18px;height:18px;border-radius:50%;background:#cbd5e1;transition:transform .2s ease,background .2s ease}
@@ -186,6 +200,43 @@ label{font-size:12px;color:var(--muted)}
       </div>
     </section>
 
+    <!-- Metrics -->
+    <section class="card metrics-card">
+      <div class="head"><strong>Server Metrics</strong></div>
+      <div class="body">
+        <div class="stat-grid">
+          <div class="stat">
+            <strong>CPU Load</strong>
+            <span id="metricLoad">Loading…</span>
+          </div>
+          <div class="stat">
+            <strong>Memory</strong>
+            <span id="metricMemory">Loading…</span>
+          </div>
+          <div class="stat">
+            <strong>Disk Usage</strong>
+            <span id="metricDisk">Loading…</span>
+          </div>
+        </div>
+        <div class="metrics-status" id="metricsStatus">Collecting server metrics…</div>
+      </div>
+    </section>
+
+    <!-- Backups -->
+    <section class="card">
+      <div class="head"><strong>Backups</strong></div>
+      <div class="body" style="display:flex;flex-direction:column;gap:12px">
+        <div class="backup-actions">
+          <button id="createBackup" class="btn blue">Create Backup</button>
+          <button id="refreshBackups" class="btn ghost">Refresh List</button>
+        </div>
+        <p class="small" id="backupLocation">Backups stored in {{ backups_path }} (relative to the server root).</p>
+        <div class="metrics-status" id="backupInfo"></div>
+        <div class="backup-list" id="backupList"></div>
+        <p class="small">Backups are tar.gz archives. Download or move them from the file manager under <code>/backups</code>.</p>
+      </div>
+    </section>
+
     <!-- File Manager -->
     <section class="card file-card">
       <div class="head"><strong>File Manager</strong><span class="small">Root: {{ file_root }}</span></div>
@@ -229,6 +280,15 @@ const fileEmptyEl = $('#fileEmpty');
 const defaultFileMessage = fileEmptyEl ? fileEmptyEl.textContent : '';
 const saveFileBtn = $('#saveFile');
 const reloadFilesBtn = $('#reloadFiles');
+const metricLoadEl = $('#metricLoad');
+const metricMemoryEl = $('#metricMemory');
+const metricDiskEl = $('#metricDisk');
+const metricsStatusEl = $('#metricsStatus');
+const backupListEl = $('#backupList');
+const backupInfoEl = $('#backupInfo');
+const backupLocationEl = $('#backupLocation');
+const createBackupBtn = $('#createBackup');
+const refreshBackupsBtn = $('#refreshBackups');
 
 const blockedExt = new Set(['.dll','.exe','.png','.jpg','.jpeg','.gif','.bmp','.ico','.webp','.tiff','.svg','.dds','.tga','.psd','.mp3','.wav','.ogg','.flac','.mp4','.avi','.mov','.mkv','.pak','.bin','.dat']);
 
@@ -280,7 +340,13 @@ function formatSize(size){
   if(size === null || size === undefined) return '';
   if(size < 1024) return size + ' B';
   if(size < 1024 * 1024) return (size/1024).toFixed(1) + ' KB';
-  return (size/1048576).toFixed(1) + ' MB';
+  if(size < 1024 * 1024 * 1024) return (size/1048576).toFixed(1) + ' MB';
+  return (size/1073741824).toFixed(1) + ' GB';
+}
+
+function formatPercent(value){
+  if(value === null || value === undefined || Number.isNaN(value)) return '';
+  return value.toFixed(1) + '%';
 }
 
 function confirmDiscard(){
@@ -424,6 +490,119 @@ async function refreshStatus(){
   }
 }
 
+async function refreshMetrics(){
+  if(!metricLoadEl) return;
+  try{
+    const r = await API('/api/metrics');
+    if(r.load){
+      metricLoadEl.textContent = `${Number(r.load["1"]).toFixed(2)} / ${Number(r.load["5"]).toFixed(2)} / ${Number(r.load["15"]).toFixed(2)}`;
+    }
+    if(r.memory){
+      metricMemoryEl.textContent = `${formatSize(r.memory.used)} of ${formatSize(r.memory.total)} (${formatPercent(r.memory.percent)})`;
+    }
+    if(r.disk){
+      metricDiskEl.textContent = `${formatSize(r.disk.used)} of ${formatSize(r.disk.total)} (${formatPercent(r.disk.percent)})`;
+    }
+    if(metricsStatusEl){
+      metricsStatusEl.classList.remove('error');
+      metricsStatusEl.textContent = 'Last updated ' + new Date().toLocaleTimeString();
+    }
+  }catch(e){
+    if(metricsStatusEl){
+      metricsStatusEl.classList.add('error');
+      metricsStatusEl.textContent = 'Metrics unavailable: ' + e.message;
+    }
+  }
+}
+
+function setBackupBusy(v){
+  if(createBackupBtn) createBackupBtn.disabled = v;
+  if(refreshBackupsBtn) refreshBackupsBtn.disabled = v;
+  if(backupListEl) backupListEl.style.opacity = v ? 0.6 : 1;
+}
+
+function renderBackups(list){
+  if(!backupListEl) return;
+  backupListEl.innerHTML = '';
+  if(!list || !list.length){
+    const empty = document.createElement('div');
+    empty.className = 'backup-empty';
+    empty.textContent = 'No backups yet.';
+    backupListEl.appendChild(empty);
+    return;
+  }
+
+  list.forEach(item=>{
+    const row = document.createElement('div');
+    row.className = 'backup-item';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const name = document.createElement('strong');
+    name.textContent = item.name;
+    const detail = document.createElement('span');
+    const size = formatSize(item.size);
+    const when = item.modified ? new Date(item.modified * 1000).toLocaleString() : '';
+    detail.textContent = `${size}${when ? ' • ' + when : ''}`;
+    meta.appendChild(name);
+    meta.appendChild(detail);
+    row.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'backup-actions';
+    const del = document.createElement('button');
+    del.className = 'btn ghost';
+    del.style.padding = '6px 12px';
+    del.textContent = 'Delete';
+    del.onclick = ()=> deleteBackup(item.name);
+    actions.appendChild(del);
+    row.appendChild(actions);
+
+    backupListEl.appendChild(row);
+  });
+}
+
+async function loadBackups(opts={}){
+  if(!backupListEl) return;
+  if(backupInfoEl){
+    backupInfoEl.textContent = 'Refreshing backups…';
+    backupInfoEl.classList.remove('error');
+  }
+  const showBusy = !!opts.busy;
+  if(showBusy) setBackupBusy(true);
+  try{
+    const data = await API('/api/backups');
+    if(backupLocationEl && data.path !== undefined){
+      backupLocationEl.textContent = 'Backups stored in ' + displayPath(data.path || '') + ' (relative to the server root).';
+    }
+    renderBackups(data.backups || []);
+    if(backupInfoEl){
+      backupInfoEl.textContent = 'Last refreshed ' + new Date().toLocaleTimeString();
+    }
+  }catch(e){
+    if(backupInfoEl){
+      backupInfoEl.textContent = 'Unable to load backups: ' + e.message;
+      backupInfoEl.classList.add('error');
+    }
+  }finally{
+    if(showBusy) setBackupBusy(false);
+  }
+}
+
+async function deleteBackup(name){
+  if(!name) return;
+  if(!confirm('Delete backup "' + name + '"?')) return;
+  setBackupBusy(true);
+  try{
+    await API('/api/backups/' + encodeURIComponent(name), {method:'DELETE'});
+    toast('Backup deleted.');
+    await loadBackups();
+  }catch(e){
+    toast('Delete failed: ' + e.message, false);
+  }finally{
+    setBackupBusy(false);
+  }
+}
+
 let es;
 function startLogs(){
   if(es) es.close();
@@ -490,12 +669,34 @@ if(fileContentEl){
 }
 saveFileBtn.onclick = ()=> saveFile();
 reloadFilesBtn.onclick = ()=>{ if(fsLoading) return; loadDir(currentDir); };
+if(refreshBackupsBtn){
+  refreshBackupsBtn.onclick = ()=> loadBackups({busy:true});
+}
+if(createBackupBtn){
+  createBackupBtn.onclick = async ()=>{
+    const label = prompt('Optional label for this backup (letters, numbers, dashes, and underscores only):','');
+    const payload = label && label.trim() ? {label: label.trim()} : {};
+    setBackupBusy(true);
+    try{
+      const r = await API('/api/backups', {method:'POST', body: JSON.stringify(payload)});
+      toast('Backup created: ' + (r.backup ? r.backup.name : 'success'));
+      await loadBackups();
+    }catch(e){
+      toast('Backup failed: ' + e.message, false);
+    }finally{
+      setBackupBusy(false);
+    }
+  };
+}
 resetEditor();
 loadDir();
 
 refreshStatus();
+refreshMetrics();
 startLogs();
 setInterval(refreshStatus, 4000);
+setInterval(refreshMetrics, 10000);
+loadBackups();
 
 if(autoRustToggle){
   autoRustToggle.addEventListener('change', async ()=>{
