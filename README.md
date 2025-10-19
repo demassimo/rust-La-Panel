@@ -2,8 +2,10 @@
 
 A tiny Flask web panel to manage a Rust Dedicated Server on Linux.
 Features:
+- Secure login screen (session cookie, configurable credentials)
 - Live console (journalctl -fu) via Server-Sent Events
 - Start / Stop / Restart (systemd service)
+- **Install Rust** via SteamCMD (first-time bootstrap)
 - **Update Rust** via SteamCMD
 - **Install/Update Oxide/uMod** from a provided ZIP URL (or Carbon if you supply its URL)
 
@@ -19,6 +21,7 @@ You can change these in the helper scripts under `scripts/` or via env vars used
 
 ### 1) Create the helper scripts (as root)
 ```
+install -Dm755 scripts/rust_install.sh /usr/local/bin/rust_install.sh
 install -Dm755 scripts/rust_update.sh /usr/local/bin/rust_update.sh
 install -Dm755 scripts/oxide_update.sh /usr/local/bin/oxide_update.sh
 ```
@@ -33,6 +36,7 @@ rustpanel ALL=NOPASSWD: /bin/systemctl stop rust-server
 rustpanel ALL=NOPASSWD: /bin/systemctl restart rust-server
 rustpanel ALL=NOPASSWD: /bin/systemctl status rust-server
 rustpanel ALL=NOPASSWD: /bin/journalctl -u rust-server
+rustpanel ALL=NOPASSWD: /usr/local/bin/rust_install.sh
 rustpanel ALL=NOPASSWD: /usr/local/bin/rust_update.sh
 rustpanel ALL=NOPASSWD: /usr/local/bin/oxide_update.sh *
 ---------------------------------------
@@ -63,7 +67,12 @@ After=network.target
 User=rustpanel
 WorkingDirectory=/home/rustpanel/rust-panel
 Environment=RUST_SERVICE=rust-server
-# Optional auth token (uncomment):
+# Optional: override login credentials (defaults admin/rustpanel)
+# Environment=RUSTPANEL_USER=rustpanel
+# Environment=RUSTPANEL_PASSWORD=ChangeMeNow
+# Or provide a pre-hashed password (pbkdf2:sha256)
+# Environment=RUSTPANEL_PASSWORD_HASH=...
+# Optional auth token for API callers (still works in addition to UI login)
 # Environment=RUSTPANEL_TOKEN=YourStrongTokenHere
 ExecStart=/home/rustpanel/venv/bin/python /home/rustpanel/rust-panel/app.py
 Restart=on-failure
@@ -81,8 +90,10 @@ systemctl enable --now rustpanel
 
 ## Using the panel
 - Visit: `http://<container-ip>:8080`
+- Log in with the configured credentials (default `admin` / `rustpanel` — change these!).
 - Buttons:
   - **Start/Stop/Restart**
+  - **Install Rust**: bootstraps/validates the dedicated server with SteamCMD
   - **Update Rust**: runs SteamCMD `+app_update 258550`
   - **Install/Update Oxide**: provide a **direct ZIP URL** and click update
 
