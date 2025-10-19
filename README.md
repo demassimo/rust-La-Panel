@@ -7,7 +7,7 @@ Features:
 - Start / Stop / Restart (systemd service)
 - **Install Rust** via SteamCMD (first-time bootstrap)
 - **Update Rust** via SteamCMD
-- **Install/Update Oxide/uMod** from a provided ZIP URL (or Carbon if you supply its URL)
+- **Install/Update Oxide/uMod** from a provided ZIP URL (or Carbon if you supply its URL) — prefilled with the latest Linux build
 - Optional toggle to auto-run a Rust download before Oxide installs
 - Web configuration page to adjust service paths and script settings
 
@@ -102,7 +102,7 @@ systemctl enable --now rustpanel
 ### Getting an Oxide/Carbon ZIP URL
 - uMod/Oxide: get a direct Linux build ZIP URL from the uMod site.
 - Carbon: copy the link to the Linux build zip from their releases.
-Paste that URL into the panel field and run the installer.
+The panel now pre-populates the Oxide field with the latest Linux build from GitHub, so you can simply click install to grab the newest release. Paste a different URL if you need a specific build.
 
 ## Nightly auto-update (optional)
 Add a cron for the `steam` user:
