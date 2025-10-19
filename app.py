@@ -7,8 +7,10 @@ from datetime import datetime
 from functools import wraps
 from flask import Flask, Response, request, jsonify, render_template, redirect, url_for, session
 from werkzeug.security import check_password_hash, generate_password_hash
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 CONFIG_FILE = Path(os.environ.get("RUSTPANEL_CONFIG_FILE", BASE_DIR / "config.json")).expanduser()
 
 # === CONFIGURATION ===
