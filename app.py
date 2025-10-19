@@ -1,5 +1,7 @@
 import os, subprocess, contextlib
-from flask import Flask, Response, request, jsonify, render_template
+from functools import wraps
+from flask import Flask, Response, request, jsonify, render_template, redirect, url_for, session
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # === CONFIGURATION ===
 SERVICE = os.environ.get("RUST_SERVICE", "rust-server")
@@ -11,19 +13,40 @@ STEAM_HOME = os.environ.get("STEAM_HOME", f"/home/{STEAM_USER}")
 STEAMCMD = os.environ.get("STEAMCMD", f"{STEAM_HOME}/steamcmd/steamcmd.sh")
 RUST_DIR  = os.environ.get("RUST_DIR",  f"{STEAM_HOME}/rust-server")
 
+PANEL_USER = os.environ.get("RUSTPANEL_USER", "admin")
+_password_hash = os.environ.get("RUSTPANEL_PASSWORD_HASH", "")
+if _password_hash:
+    PANEL_PASSWORD_HASH = _password_hash
+else:
+    PANEL_PASSWORD_HASH = generate_password_hash(os.environ.get("RUSTPANEL_PASSWORD", "rustpanel"))
+
+SECRET = os.environ.get("RUSTPANEL_SECRET") or os.environ.get("SECRET_KEY") or os.urandom(32)
+
 # --- Flask setup (define template path manually) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+app.secret_key = SECRET
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 # === HELPERS ===
 def _authorized(req):
-    """Check token if set"""
-    if not AUTH_TOKEN:
+    """Check session login or token header"""
+    if session.get("rp_auth"):
         return True
-    return req.headers.get("X-Auth-Token") == AUTH_TOKEN
+    if AUTH_TOKEN and req.headers.get("X-Auth-Token") == AUTH_TOKEN:
+        return True
+    return False
+
+def _login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("rp_auth"):
+            return redirect(url_for("login", next=request.full_path if request.query_string else request.path))
+        return view(*args, **kwargs)
+    return wrapped
 
 def _run(cmd: list[str]):
     """Run shell command and return (code, output)"""
@@ -32,8 +55,35 @@ def _run(cmd: list[str]):
 
 # === ROUTES ===
 @app.route("/")
+@_login_required
 def index():
-    return render_template("index.html", service=SERVICE, token_set=bool(AUTH_TOKEN))
+    return render_template("index.html", service=SERVICE)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("rp_auth"):
+        return redirect(url_for("index"))
+
+    error = None
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        if username != PANEL_USER or not check_password_hash(PANEL_PASSWORD_HASH, password):
+            error = "Invalid username or password"
+        else:
+            session["rp_auth"] = True
+            session.permanent = True
+            target = request.args.get("next")
+            return redirect(target or url_for("index"))
+
+    return render_template("login.html", error=error)
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # --- Basic systemd control ---
 @app.get("/api/status")
@@ -84,6 +134,15 @@ def update_rust():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     code, out = _run(["sudo", "/usr/local/bin/rust_update.sh"])
+    return jsonify({"ok": code == 0, "exit": code, "output": out})
+
+
+@app.post("/api/install_rust")
+def install_rust():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    code, out = _run(["sudo", "/usr/local/bin/rust_install.sh"])
     return jsonify({"ok": code == 0, "exit": code, "output": out})
 
 # --- Oxide/uMod/Carbon installer ---
