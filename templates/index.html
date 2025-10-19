@@ -85,7 +85,12 @@ label{font-size:12px;color:var(--muted)}
       <h1>Rust Panel</h1>
       <span class="badge">service: <b>{{service}}</b></span>
     </div>
-    <div class="badge" id="pill">checking…</div>
+    <div class="row" style="gap:10px">
+      <div class="badge" id="pill">checking…</div>
+      <form action="{{ url_for('logout') }}" method="post" style="margin:0">
+        <button type="submit" class="btn ghost" style="padding:8px 12px">Logout</button>
+      </form>
+    </div>
   </div>
 
   <div class="grid">
@@ -100,10 +105,11 @@ label{font-size:12px;color:var(--muted)}
         </div>
 
         <div class="row" style="margin:12px 0 6px">
+          <button id="installRust" class="btn blue">Install Rust Server</button>
           <button id="updateRust" class="btn blue">Update Rust</button>
         </div>
 
-        <div class="kv" style="margin:6px 0 12px">
+        <div class="row" style="margin:12px 0 6px">
           <input id="oxideUrl" class="url" placeholder="Direct ZIP URL for Oxide/uMod or Carbon (Linux build)">
           <button id="updateOxide" class="btn purple">Install/Update Oxide</button>
         </div>
@@ -146,12 +152,8 @@ label{font-size:12px;color:var(--muted)}
 </div>
 
 <script>
-const tokenSet = {{ 'true' if token_set else 'false' }};
-const AUTH = tokenSet ? {'X-Auth-Token': (localStorage.getItem('rp_token')||prompt('Panel token:')||'')} : {};
-if(tokenSet && !localStorage.getItem('rp_token')) localStorage.setItem('rp_token', AUTH['X-Auth-Token']);
-
 const $ = (s)=>document.querySelector(s);
-const btns = ['#start','#stop','#restart','#updateRust','#updateOxide','#reloadLogs'].map(s=>$(s));
+const btns = ['#start','#stop','#restart','#installRust','#updateRust','#updateOxide','#reloadLogs'].map(s=>$(s));
 const busy = $('#busy'), pill = $('#pill');
 
 function setBusy(v){ busy.style.display = v ? 'flex':'none'; btns.forEach(b=>b.disabled=v); }
@@ -160,8 +162,11 @@ function toast(msg, ok=true){
   $('#toast').appendChild(t); setTimeout(()=>{t.style.opacity='0'; t.style.transform='translateY(6px)'; setTimeout(()=>t.remove(),300)}, 2600);
 }
 async function API(path,opts={}){
-  opts.headers = Object.assign({'Content-Type':'application/json'}, AUTH, opts.headers||{});
-  const r = await fetch(path, opts); if(!r.ok){ throw new Error('HTTP '+r.status); }
+  opts.headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  opts.credentials = 'same-origin';
+  const r = await fetch(path, opts);
+  if(r.status === 401){ window.location = '/login?next='+encodeURIComponent(window.location.pathname); throw new Error('unauthorized'); }
+  if(!r.ok){ throw new Error('HTTP '+r.status); }
   return r.json();
 }
 
@@ -185,7 +190,7 @@ function startLogs(){
   const since = $('#since').value || '';
   const url = '/api/logs?n='+encodeURIComponent(n)+(since?('&since='+encodeURIComponent(since)):'');
   $('#logs').textContent = ''; // clear
-  es = new EventSource(url, {withCredentials:false});
+  es = new EventSource(url, {withCredentials:true});
   es.onmessage = (e)=>{ $('#logs').textContent += (e.data||'')+"\n"; const el=$('#logs'); el.scrollTop=el.scrollHeight; };
   es.onerror = ()=>{ $('#logs').textContent += "\n[connection lost — click Reload Logs]\n"; es.close(); };
 }
@@ -211,6 +216,17 @@ $('#updateRust').onclick = async ()=>{
     toast((r.ok?'Rust updated: ':'Update failed: ')+(r.output||r.exit), r.ok);
     await refreshStatus();
   }catch(e){ toast('Rust update failed: '+e.message, false) }
+  finally{ setBusy(false); }
+};
+
+$('#installRust').onclick = async ()=>{
+  if(!confirm('Install/validate the Rust Dedicated Server using SteamCMD?')) return;
+  setBusy(true);
+  try{
+    const r = await API('/api/install_rust', {method:'POST'});
+    toast((r.ok?'Rust installed: ':'Install failed: ')+(r.output||r.exit), r.ok);
+    await refreshStatus();
+  }catch(e){ toast('Rust install failed: '+e.message, false) }
   finally{ setBusy(false); }
 };
 
