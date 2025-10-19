@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rust Panel</title>
+<style>
+:root{
+  --bg:#0b0e14; --surface:#0f131a; --panel:#121826; --sunken:#0b1017;
+  --text:#e6edf3; --muted:#9aa4ad; --accent:#22d3ee; --accent-2:#7c3aed;
+  --good:#22c55e; --warn:#f59e0b; --bad:#ef4444; --blue:#3b82f6;
+  --radius:14px; --shadow:0 12px 36px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(1200px 800px at 20% -20%,rgba(124,58,237,.08),transparent 60%),
+             radial-gradient(1000px 700px at 120% 0%,rgba(34,211,238,.06),transparent 60%),
+             var(--bg);
+ color:var(--text); font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,Ubuntu,Arial}
+a{color:inherit}
+.container{max-width:1200px;margin:24px auto;padding:0 16px}
+.header{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+.brand{display:flex;gap:12px;align-items:center}
+.logo{width:36px;height:36px;border-radius:10px;background:
+  conic-gradient(from 200deg at 70% 40%, var(--accent), transparent 40%),
+  conic-gradient(from 20deg at 30% 60%, var(--accent-2), transparent 55%);
+box-shadow:inset 0 0 0 1px rgba(255,255,255,.06), var(--shadow)}
+.brand h1{margin:0;font-size:18px;letter-spacing:.3px}
+.badge{padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--muted);font-size:12px}
+
+.grid{display:grid;grid-template-columns:320px 1fr;gap:16px}
+@media (max-width:980px){.grid{grid-template-columns:1fr}}
+
+.card{background:linear-gradient(180deg,rgba(255,255,255,.03),transparent 60%),var(--panel);
+border:1px solid rgba(255,255,255,.06); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden}
+.card .head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.06);background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02))}
+.card .body{padding:16px}
+
+.row{display:flex;flex-wrap:wrap;gap:10px}
+.btn{appearance:none;border:0;border-radius:12px;padding:10px 14px;background:#1a2332;color:#e8eef5;cursor:pointer;transition:transform .05s ease,opacity .2s}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn[disabled]{opacity:.6;cursor:not-allowed}
+.btn.good{background:linear-gradient(180deg,#25d366,#1faa59)}
+.btn.bad{background:linear-gradient(180deg,#ef4444,#b91c1c)}
+.btn.warn{background:linear-gradient(180deg,#f59e0b,#b45309)}
+.btn.blue{background:linear-gradient(180deg,#60a5fa,#2563eb)}
+.btn.purple{background:linear-gradient(180deg,#a78bfa,#7c3aed)}
+.btn.ghost{background:#111827;border:1px solid rgba(255,255,255,.08);color:#cbd5e1}
+
+.input, .url{width:100%;background:#0d121b;border:1px solid rgba(255,255,255,.08);color:#e6edf3;border-radius:10px;padding:10px 12px}
+.small{color:var(--muted);font-size:12px}
+
+.kv{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+.pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px}
+.pill.ok{background:rgba(34,197,94,.15);color:#86efac;border:1px solid rgba(34,197,94,.25)}
+.pill.err{background:rgba(239,68,68,.15);color:#fecaca;border:1px solid rgba(239,68,68,.25)}
+
+pre#logs{margin:0;background:linear-gradient(180deg,rgba(0,0,0,.3),transparent 40%),#0b1017;
+border-top:1px solid rgba(255,255,255,.06);
+font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cbd5e1;
+max-height:68vh; overflow:auto; padding:14px}
+
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.toolbar .group{display:flex;gap:8px;align-items:center}
+label{font-size:12px;color:var(--muted)}
+.input-inline{width:110px}
+
+.footer{margin-top:14px;padding:10px 16px;background:var(--sunken);border-top:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
+
+/* Toasts */
+.toast{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
+.toast .t{padding:10px 12px;border-radius:10px;background:#0f172a;border:1px solid rgba(255,255,255,.08);box-shadow:var(--shadow);min-width:240px}
+.t.ok{border-color:rgba(34,197,94,.4)} .t.err{border-color:rgba(239,68,68,.4)}
+/* Spinner */
+.spinner{width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="brand">
+      <div class="logo"></div>
+      <h1>Rust Panel</h1>
+      <span class="badge">service: <b>{{service}}</b></span>
+    </div>
+    <div class="badge" id="pill">checking…</div>
+  </div>
+
+  <div class="grid">
+    <!-- Controls -->
+    <section class="card">
+      <div class="head"><strong>Controls</strong></div>
+      <div class="body">
+        <div class="row" style="margin-bottom:10px">
+          <button id="start" class="btn good">Start</button>
+          <button id="stop" class="btn bad">Stop</button>
+          <button id="restart" class="btn warn">Restart</button>
+        </div>
+
+        <div class="row" style="margin:12px 0 6px">
+          <button id="updateRust" class="btn blue">Update Rust</button>
+        </div>
+
+        <div class="kv" style="margin:6px 0 12px">
+          <input id="oxideUrl" class="url" placeholder="Direct ZIP URL for Oxide/uMod or Carbon (Linux build)">
+          <button id="updateOxide" class="btn purple">Install/Update Oxide</button>
+        </div>
+
+        <div class="toolbar" style="margin-top:6px">
+          <div class="group">
+            <label for="tailN">Last</label>
+            <input id="tailN" class="input input-inline" type="number" value="300" min="50" max="3000">
+          </div>
+          <div class="group">
+            <label for="since">Since</label>
+            <input id="since" class="input input-inline" type="text" placeholder="e.g. 15m, 2h">
+          </div>
+          <button id="reloadLogs" class="btn ghost">Reload Logs</button>
+        </div>
+
+        <p class="small" style="margin-top:8px">
+          Tip: keep Oxide/Carbon ZIPs for Linux only. Rust updates use SteamCMD and will validate files.
+        </p>
+      </div>
+    </section>
+
+    <!-- Status & Logs -->
+    <section class="card">
+      <div class="head"><strong>Status & Console</strong></div>
+      <div class="body" style="padding:0">
+        <div id="statusBox" style="padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.06); background:linear-gradient(180deg,rgba(255,255,255,.03),transparent)">
+          <div id="statusText" class="small">Fetching status…</div>
+        </div>
+        <pre id="logs">Loading logs…</pre>
+      </div>
+      <div class="footer">
+        <span>Live console (SSE). Auto-updates every 4s for status.</span>
+        <span id="busy" style="display:none;gap:8px;align-items:center"><span class="spinner"></span> Working…</span>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+const tokenSet = {{ 'true' if token_set else 'false' }};
+const AUTH = tokenSet ? {'X-Auth-Token': (localStorage.getItem('rp_token')||prompt('Panel token:')||'')} : {};
+if(tokenSet && !localStorage.getItem('rp_token')) localStorage.setItem('rp_token', AUTH['X-Auth-Token']);
+
+const $ = (s)=>document.querySelector(s);
+const btns = ['#start','#stop','#restart','#updateRust','#updateOxide','#reloadLogs'].map(s=>$(s));
+const busy = $('#busy'), pill = $('#pill');
+
+function setBusy(v){ busy.style.display = v ? 'flex':'none'; btns.forEach(b=>b.disabled=v); }
+function toast(msg, ok=true){
+  const t = document.createElement('div'); t.className = 't '+(ok?'ok':'err'); t.textContent = msg;
+  $('#toast').appendChild(t); setTimeout(()=>{t.style.opacity='0'; t.style.transform='translateY(6px)'; setTimeout(()=>t.remove(),300)}, 2600);
+}
+async function API(path,opts={}){
+  opts.headers = Object.assign({'Content-Type':'application/json'}, AUTH, opts.headers||{});
+  const r = await fetch(path, opts); if(!r.ok){ throw new Error('HTTP '+r.status); }
+  return r.json();
+}
+
+async function refreshStatus(){
+  try{
+    const r = await API('/api/status');
+    const ok = !!r.ok;
+    $('#statusText').textContent = (ok?'Status: OK\n\n':'Status: Error\n\n') + (r.output||'');
+    pill.className = 'badge pill '+(ok?'ok':'err');
+    pill.textContent = ok ? 'running' : 'stopped / error';
+  }catch(e){
+    $('#statusText').textContent = 'Status fetch failed: '+e.message;
+    pill.className = 'badge pill err'; pill.textContent = 'unreachable';
+  }
+}
+
+let es;
+function startLogs(){
+  if(es) es.close();
+  const n = $('#tailN').value || '300';
+  const since = $('#since').value || '';
+  const url = '/api/logs?n='+encodeURIComponent(n)+(since?('&since='+encodeURIComponent(since)):'');
+  $('#logs').textContent = ''; // clear
+  es = new EventSource(url, {withCredentials:false});
+  es.onmessage = (e)=>{ $('#logs').textContent += (e.data||'')+"\n"; const el=$('#logs'); el.scrollTop=el.scrollHeight; };
+  es.onerror = ()=>{ $('#logs').textContent += "\n[connection lost — click Reload Logs]\n"; es.close(); };
+}
+
+async function action(act){
+  setBusy(true);
+  try{
+    const r = await API('/api/'+act, {method:'POST'});
+    toast((r.ok?'Success: ':'Error: ')+(r.output||r.exit), r.ok);
+    await refreshStatus();
+  }catch(e){ toast('Request failed: '+e.message, false) }
+  finally{ setBusy(false); }
+}
+
+$('#start').onclick   = ()=>action('start');
+$('#stop').onclick    = ()=>action('stop');
+$('#restart').onclick = ()=>action('restart');
+
+$('#updateRust').onclick = async ()=>{
+  setBusy(true);
+  try{
+    const r = await API('/api/update_rust', {method:'POST'});
+    toast((r.ok?'Rust updated: ':'Update failed: ')+(r.output||r.exit), r.ok);
+    await refreshStatus();
+  }catch(e){ toast('Rust update failed: '+e.message, false) }
+  finally{ setBusy(false); }
+};
+
+$('#updateOxide').onclick = async ()=>{
+  const url = $('#oxideUrl').value.trim();
+  if(!url){ toast('Paste a direct Linux ZIP URL for Oxide/Carbon', false); return; }
+  setBusy(true);
+  try{
+    const r = await API('/api/update_oxide', {method:'POST', body: JSON.stringify({url})});
+    toast((r.ok?'Oxide updated: ':'Oxide update failed: ')+(r.output||r.exit), r.ok);
+    await refreshStatus();
+  }catch(e){ toast('Oxide update failed: '+e.message, false) }
+  finally{ setBusy(false); }
+};
+
+$('#reloadLogs').onclick = ()=> startLogs();
+
+refreshStatus();
+startLogs();
+setInterval(refreshStatus, 4000);
+</script>
+</body>
+</html>
