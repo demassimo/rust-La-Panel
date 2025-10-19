@@ -155,7 +155,7 @@ label{font-size:12px;color:var(--muted)}
         </div>
 
         <div class="row" style="margin:12px 0 6px">
-          <input id="oxideUrl" class="url" placeholder="Direct ZIP URL for Oxide/uMod or Carbon (Linux build)">
+          <input id="oxideUrl" class="url" value="{{ default_oxide_url }}" data-default-url="{{ default_oxide_url }}" placeholder="Direct ZIP URL for Oxide/uMod or Carbon (Linux build)">
           <button id="updateOxide" class="btn purple">Install/Update Oxide</button>
         </div>
 
@@ -651,7 +651,8 @@ $('#installRust').onclick = async ()=>{
 };
 
 $('#updateOxide').onclick = async ()=>{
-  const url = $('#oxideUrl').value.trim();
+  const input = $('#oxideUrl');
+  const url = (input.value || input.dataset.defaultUrl || '').trim();
   if(!url){ toast('Paste a direct Linux ZIP URL for Oxide/Carbon', false); return; }
   setBusy(true);
   try{

@@ -20,6 +20,8 @@ _default_steamcmd = os.environ.get("STEAMCMD", f"{_default_steam_home}/steamcmd/
 _default_rust_dir = os.environ.get("RUST_DIR", f"{_default_steam_home}/rust-server")
 _default_file_root = os.environ.get("PANEL_FILE_ROOT", _default_rust_dir)
 
+DEFAULT_OXIDE_ZIP = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust-linux.zip"
+
 DEFAULT_CONFIG = {
     "service": os.environ.get("RUST_SERVICE", "rust-server"),
     "steam_user": _default_steam_user,
@@ -207,6 +209,7 @@ def index():
         token_set=bool(AUTH_TOKEN),
         file_root=str(FILE_ROOT),
         auto_download=cfg["auto_download_rust_with_oxide"],
+        default_oxide_url=DEFAULT_OXIDE_ZIP,
         backups_path='/' + BACKUP_DIR_NAME,
     )
 
@@ -332,9 +335,7 @@ def update_oxide():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
 
     data = request.get_json(silent=True) or {}
-    url = data.get("url", "").strip()
-    if not url:
-        return jsonify({"ok": False, "error": "missing url"}), 400
+    url = data.get("url", "").strip() or DEFAULT_OXIDE_ZIP
 
     cfg = _get_config()
     steps = []
