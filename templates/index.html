@@ -223,8 +223,13 @@ function toast(msg, ok=true){
   $('#toast').appendChild(t); setTimeout(()=>{t.style.opacity='0'; t.style.transform='translateY(6px)'; setTimeout(()=>t.remove(),300)}, 2600);
 }
 async function API(path,opts={}){
-  opts.headers = Object.assign({'Content-Type':'application/json'}, AUTH, opts.headers||{});
-  const r = await fetch(path, opts);
+  const options = Object.assign({credentials:'same-origin'}, opts);
+  options.headers = Object.assign({'Content-Type':'application/json'}, options.headers||{});
+  const r = await fetch(path, options);
+  if(r.status === 401){
+    window.location = '/login?next='+encodeURIComponent(window.location.pathname);
+    throw new Error('unauthorized');
+  }
   const text = await r.text();
   let data = {};
   if(text){
@@ -384,12 +389,6 @@ async function saveFile(){
   }finally{
     setFileBusy(false);
   }
-  opts.headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
-  opts.credentials = 'same-origin';
-  const r = await fetch(path, opts);
-  if(r.status === 401){ window.location = '/login?next='+encodeURIComponent(window.location.pathname); throw new Error('unauthorized'); }
-  if(!r.ok){ throw new Error('HTTP '+r.status); }
-  return r.json();
 }
 
 async function refreshStatus(){
