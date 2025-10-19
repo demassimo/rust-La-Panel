@@ -65,6 +65,16 @@ max-height:68vh; overflow:auto; padding:14px}
 label{font-size:12px;color:var(--muted)}
 .input-inline{width:110px}
 
+.toggle-line{display:flex;align-items:center;gap:12px;margin-top:8px;padding:10px 12px;background:#0d121b;border:1px solid rgba(255,255,255,.06);border-radius:12px}
+.toggle-line input[type="checkbox"]{appearance:none;position:relative;width:44px;height:24px;border-radius:999px;background:#1f2937;border:1px solid rgba(255,255,255,.12);transition:background .2s ease, border-color .2s ease;cursor:pointer}
+.toggle-line input[type="checkbox"]::after{content:"";position:absolute;top:2px;left:3px;width:18px;height:18px;border-radius:50%;background:#cbd5e1;transition:transform .2s ease,background .2s ease}
+.toggle-line input[type="checkbox"]:checked{background:linear-gradient(180deg,#22d3ee,#0ea5e9);border-color:rgba(34,211,238,.6)}
+.toggle-line input[type="checkbox"]:checked::after{transform:translateX(18px);background:#0f172a}
+.toggle-line .text{flex:1;font-size:13px;color:#d1d9e6}
+.toggle-line .text span{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.small-link{color:var(--accent);text-decoration:none}
+.small-link:hover{text-decoration:underline}
+
 .footer{margin-top:14px;padding:10px 16px;background:var(--sunken);border-top:1px solid rgba(255,255,255,.06);display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
 
 /* Toasts */
@@ -106,6 +116,7 @@ label{font-size:12px;color:var(--muted)}
       <span class="badge">service: <b>{{service}}</b></span>
     </div>
     <div class="row" style="gap:10px">
+      <a href="{{ url_for('config_page') }}" class="btn ghost" style="padding:8px 12px">Config</a>
       <div class="badge" id="pill">checking…</div>
       <form action="{{ url_for('logout') }}" method="post" style="margin:0">
         <button type="submit" class="btn ghost" style="padding:8px 12px">Logout</button>
@@ -133,6 +144,14 @@ label{font-size:12px;color:var(--muted)}
           <input id="oxideUrl" class="url" placeholder="Direct ZIP URL for Oxide/uMod or Carbon (Linux build)">
           <button id="updateOxide" class="btn purple">Install/Update Oxide</button>
         </div>
+
+        <label class="toggle-line" for="autoRustToggle">
+          <input id="autoRustToggle" type="checkbox" {% if auto_download %}checked{% endif %}>
+          <div class="text">
+            Auto-download Rust before running the Oxide installer
+            <span>Manage paths on the <a class="small-link" href="{{ url_for('config_page') }}">config page</a>.</span>
+          </div>
+        </label>
 
         <div class="toolbar" style="margin-top:6px">
           <div class="group">
@@ -200,6 +219,7 @@ label{font-size:12px;color:var(--muted)}
 const $ = (s)=>document.querySelector(s);
 const btns = ['#start','#stop','#restart','#installRust','#updateRust','#updateOxide','#reloadLogs'].map(s=>$(s));
 const busy = $('#busy'), pill = $('#pill');
+const autoRustToggle = $('#autoRustToggle');
 
 const fileListEl = $('#fileList');
 const filePathEl = $('#filePath');
@@ -476,6 +496,22 @@ loadDir();
 refreshStatus();
 startLogs();
 setInterval(refreshStatus, 4000);
+
+if(autoRustToggle){
+  autoRustToggle.addEventListener('change', async ()=>{
+    const desired = autoRustToggle.checked;
+    autoRustToggle.disabled = true;
+    try{
+      await API('/api/config', {method:'POST', body: JSON.stringify({auto_download_rust_with_oxide: desired})});
+      toast('Oxide auto-download setting updated.');
+    }catch(e){
+      autoRustToggle.checked = !desired;
+      toast('Failed to update setting: '+e.message, false);
+    }finally{
+      autoRustToggle.disabled = false;
+    }
+  });
+}
 </script>
 </body>
 </html>

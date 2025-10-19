@@ -1,20 +1,128 @@
+import json
 import os, subprocess, contextlib
 from pathlib import Path
+from threading import Lock
 
 from functools import wraps
 from flask import Flask, Response, request, jsonify, render_template, redirect, url_for, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_FILE = Path(os.environ.get("RUSTPANEL_CONFIG_FILE", BASE_DIR / "config.json")).expanduser()
+
 # === CONFIGURATION ===
-SERVICE = os.environ.get("RUST_SERVICE", "rust-server")
 AUTH_TOKEN = os.environ.get("RUSTPANEL_TOKEN", "")  # optional token
 
-# Optional overrides for your setup
-STEAM_USER = os.environ.get("STEAM_USER", "steam")
-STEAM_HOME = os.environ.get("STEAM_HOME", f"/home/{STEAM_USER}")
-STEAMCMD = os.environ.get("STEAMCMD", f"{STEAM_HOME}/steamcmd/steamcmd.sh")
-RUST_DIR  = os.environ.get("RUST_DIR",  f"{STEAM_HOME}/rust-server")
-FILE_ROOT = Path(os.environ.get("PANEL_FILE_ROOT", RUST_DIR)).resolve()
+_default_steam_user = os.environ.get("STEAM_USER", "steam")
+_default_steam_home = os.environ.get("STEAM_HOME", f"/home/{_default_steam_user}")
+_default_steamcmd = os.environ.get("STEAMCMD", f"{_default_steam_home}/steamcmd/steamcmd.sh")
+_default_rust_dir = os.environ.get("RUST_DIR", f"{_default_steam_home}/rust-server")
+_default_file_root = os.environ.get("PANEL_FILE_ROOT", _default_rust_dir)
+
+DEFAULT_CONFIG = {
+    "service": os.environ.get("RUST_SERVICE", "rust-server"),
+    "steam_user": _default_steam_user,
+    "steam_home": _default_steam_home,
+    "steamcmd": _default_steamcmd,
+    "rust_dir": _default_rust_dir,
+    "file_root": _default_file_root,
+    "auto_download_rust_with_oxide": False,
+}
+
+_CONFIG_LOCK = Lock()
+
+def _load_config_file() -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            for key in cfg:
+                if key in data:
+                    cfg[key] = data[key]
+    return cfg
+
+def _persist_config(cfg: dict) -> None:
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2, sort_keys=True))
+    tmp.replace(CONFIG_FILE)
+
+def _normalize_paths(value: str, *, field: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError(f"{field} is required")
+    if not value.startswith("/"):
+        raise ValueError(f"{field} must be an absolute path")
+    return str(Path(value).expanduser())
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+def _update_config(updates: dict) -> dict:
+    global CONFIG
+    with _CONFIG_LOCK:
+        cfg = dict(CONFIG)
+        for key, value in updates.items():
+            if key not in DEFAULT_CONFIG:
+                raise ValueError(f"Unknown setting: {key}")
+            if key == "auto_download_rust_with_oxide":
+                cfg[key] = _coerce_bool(value)
+                continue
+            if not isinstance(value, str):
+                raise ValueError(f"{key} must be a string")
+            if key in {"steam_home", "steamcmd", "rust_dir", "file_root"}:
+                cfg[key] = _normalize_paths(value, field=key.replace("_", " ").title())
+            else:
+                value = value.strip()
+                if not value:
+                    raise ValueError(f"{key.replace('_', ' ').title()} is required")
+                cfg[key] = value
+        CONFIG = cfg
+        _apply_config(CONFIG)
+        _persist_config(CONFIG)
+        return dict(CONFIG)
+
+def _get_config() -> dict:
+    with _CONFIG_LOCK:
+        return dict(CONFIG)
+
+def _build_script_env(cfg: dict, file_root: Path) -> dict:
+    env = os.environ.copy()
+    env.update(
+        {
+            "RUST_SERVICE": cfg["service"],
+            "STEAM_USER": cfg["steam_user"],
+            "STEAM_HOME": cfg["steam_home"],
+            "STEAMCMD": cfg["steamcmd"],
+            "RUST_DIR": cfg["rust_dir"],
+            "PANEL_FILE_ROOT": str(file_root),
+        }
+    )
+    return env
+
+def _apply_config(cfg: dict) -> None:
+    global SERVICE, STEAM_USER, STEAM_HOME, STEAMCMD, RUST_DIR, FILE_ROOT, SCRIPT_ENV
+    SERVICE = cfg["service"]
+    STEAM_USER = cfg["steam_user"]
+    STEAM_HOME = cfg["steam_home"]
+    STEAMCMD = cfg["steamcmd"]
+    RUST_DIR = cfg["rust_dir"]
+    FILE_ROOT = Path(cfg["file_root"]).expanduser().resolve()
+    SCRIPT_ENV = _build_script_env(cfg, FILE_ROOT)
+
+
+CONFIG = _load_config_file()
+SCRIPT_ENV: dict[str, str]
+SERVICE = STEAM_USER = STEAM_HOME = STEAMCMD = RUST_DIR = ""
+FILE_ROOT = Path(DEFAULT_CONFIG["file_root"]).expanduser().resolve()
+_apply_config(CONFIG)
 
 PANEL_USER = os.environ.get("RUSTPANEL_USER", "admin")
 _password_hash = os.environ.get("RUSTPANEL_PASSWORD_HASH", "")
@@ -26,11 +134,10 @@ else:
 SECRET = os.environ.get("RUSTPANEL_SECRET") or os.environ.get("SECRET_KEY") or os.urandom(32)
 
 # --- Flask setup (define template path manually) ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMPLATE_DIR = BASE_DIR / "templates"
+STATIC_DIR = BASE_DIR / "static"
 
-app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
+app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 app.secret_key = SECRET
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
@@ -53,7 +160,7 @@ def _login_required(view):
 
 def _run(cmd: list[str]):
     """Run shell command and return (code, output)"""
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, capture_output=True, text=True, env=SCRIPT_ENV)
     return p.returncode, (p.stdout or p.stderr or "").strip()
 
 def _safe_path(rel: str) -> Path:
@@ -89,14 +196,14 @@ def _list_entries(path: Path):
 @app.route("/")
 @_login_required
 def index():
+    cfg = _get_config()
     return render_template(
         "index.html",
-        service=SERVICE,
+        service=cfg["service"],
         token_set=bool(AUTH_TOKEN),
         file_root=str(FILE_ROOT),
+        auto_download=cfg["auto_download_rust_with_oxide"],
     )
-
-    return render_template("index.html", service=SERVICE)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -117,6 +224,34 @@ def login():
             return redirect(target or url_for("index"))
 
     return render_template("login.html", error=error)
+
+
+@app.route("/config", methods=["GET", "POST"])
+@_login_required
+def config_page():
+    message = None
+    error = None
+    cfg = _get_config()
+
+    if request.method == "POST":
+        updates = {
+            "service": request.form.get("service", ""),
+            "steam_user": request.form.get("steam_user", ""),
+            "steam_home": request.form.get("steam_home", ""),
+            "steamcmd": request.form.get("steamcmd", ""),
+            "rust_dir": request.form.get("rust_dir", ""),
+            "file_root": request.form.get("file_root", ""),
+            "auto_download_rust_with_oxide": request.form.get("auto_download_rust_with_oxide", "off"),
+        }
+        try:
+            cfg = _update_config(updates)
+            message = "Configuration saved."
+        except ValueError as exc:
+            error = str(exc)
+            cfg.update({k: v for k, v in updates.items() if k in cfg and k != "auto_download_rust_with_oxide"})
+            cfg["auto_download_rust_with_oxide"] = _coerce_bool(updates.get("auto_download_rust_with_oxide", False))
+
+    return render_template("config.html", config=cfg, message=message, error=error, config_path=str(CONFIG_FILE))
 
 
 @app.post("/logout")
@@ -196,8 +331,40 @@ def update_oxide():
     if not url:
         return jsonify({"ok": False, "error": "missing url"}), 400
 
+    cfg = _get_config()
+    steps = []
+    if cfg.get("auto_download_rust_with_oxide"):
+        rust_code, rust_out = _run(["sudo", "/usr/local/bin/rust_update.sh"])
+        steps.append(("Rust update", rust_code, rust_out))
+        if rust_code != 0:
+            combined = "\n\n".join(f"{name} exit {code}: {text}".strip() for name, code, text in steps)
+            return jsonify({"ok": False, "exit": rust_code, "output": combined})
+
     code, out = _run(["sudo", "/usr/local/bin/oxide_update.sh", url])
-    return jsonify({"ok": code == 0, "exit": code, "output": out})
+    steps.append(("Oxide update", code, out))
+    combined = "\n\n".join(f"{name} exit {code}: {text}".strip() for name, code, text in steps)
+    return jsonify({"ok": code == 0 and all(step[1] == 0 for step in steps), "exit": code, "output": combined})
+
+
+@app.get("/api/config")
+def api_get_config():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    return jsonify({"ok": True, "config": _get_config()})
+
+
+@app.post("/api/config")
+def api_update_config():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "invalid payload"}), 400
+    try:
+        cfg = _update_config(data)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "config": cfg})
 
 # --- File manager ---
 BANNED_EXTS = {".dll", ".exe", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".svg",
