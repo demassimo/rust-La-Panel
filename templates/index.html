@@ -74,6 +74,26 @@ label{font-size:12px;color:var(--muted)}
 /* Spinner */
 .spinner{width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+.file-card{grid-column:1 / -1}
+.file-body{display:flex;gap:0;border-top:1px solid rgba(255,255,255,.05)}
+@media (max-width:980px){.file-body{flex-direction:column}}
+.file-sidebar{width:260px;max-width:100%;background:rgba(15,19,26,.7);border-right:1px solid rgba(255,255,255,.05);display:flex;flex-direction:column}
+.file-toolbar{padding:12px 14px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,.05)}
+.file-toolbar .path{font-size:12px;color:var(--muted);word-break:break-all}
+.file-list{flex:1;overflow:auto}
+.file-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;transition:background .12s ease}
+.file-row:hover{background:rgba(255,255,255,.04)}
+.file-row.dir strong::before{content:"\1F4C1\0020"}
+.file-row.file strong::before{content:"\1F4C4\0020"}
+.file-row.blocked{opacity:.55;cursor:not-allowed}
+.file-row.blocked strong::before{content:"\1F6AB\0020"}
+.file-size{font-size:12px;color:var(--muted)}
+.file-editor{flex:1;display:flex;flex-direction:column}
+.file-editor-head{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.05);display:flex;justify-content:space-between;align-items:center;gap:12px}
+.file-editor-head .name{font-weight:600;font-size:13px;word-break:break-all}
+#fileContent{flex:1;padding:16px;background:var(--sunken);color:var(--text);border:0;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:none;min-height:260px}
+.file-empty{padding:24px;color:var(--muted);font-size:13px}
 </style>
 </head>
 <body>
@@ -140,6 +160,31 @@ label{font-size:12px;color:var(--muted)}
         <span id="busy" style="display:none;gap:8px;align-items:center"><span class="spinner"></span> Working…</span>
       </div>
     </section>
+
+    <!-- File Manager -->
+    <section class="card file-card">
+      <div class="head"><strong>File Manager</strong><span class="small">Root: {{ file_root }}</span></div>
+      <div class="body" style="padding:0">
+        <div class="file-body">
+          <div class="file-sidebar">
+            <div class="file-toolbar">
+              <div style="font-weight:600;font-size:13px">Current folder</div>
+              <div class="path" id="filePath">/</div>
+              <button id="reloadFiles" class="btn ghost" style="width:100%">Reload</button>
+            </div>
+            <div class="file-list" id="fileList"></div>
+          </div>
+          <div class="file-editor">
+            <div class="file-editor-head">
+              <div class="name" id="fileName">Select a text file to view/edit</div>
+              <button id="saveFile" class="btn blue" disabled>Save</button>
+            </div>
+            <textarea id="fileContent" spellcheck="false" style="display:none" disabled></textarea>
+            <div class="file-empty" id="fileEmpty">Select a text file from the list to view or edit it.</div>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -154,6 +199,22 @@ const $ = (s)=>document.querySelector(s);
 const btns = ['#start','#stop','#restart','#updateRust','#updateOxide','#reloadLogs'].map(s=>$(s));
 const busy = $('#busy'), pill = $('#pill');
 
+const fileListEl = $('#fileList');
+const filePathEl = $('#filePath');
+const fileNameEl = $('#fileName');
+const fileContentEl = $('#fileContent');
+const fileEmptyEl = $('#fileEmpty');
+const defaultFileMessage = fileEmptyEl ? fileEmptyEl.textContent : '';
+const saveFileBtn = $('#saveFile');
+const reloadFilesBtn = $('#reloadFiles');
+
+const blockedExt = new Set(['.dll','.exe','.png','.jpg','.jpeg','.gif','.bmp','.ico','.webp','.tiff','.svg','.dds','.tga','.psd','.mp3','.wav','.ogg','.flac','.mp4','.avi','.mov','.mkv','.pak','.bin','.dat']);
+
+let currentDir = '';
+let currentFile = '';
+let fileDirty = false;
+let fsLoading = false;
+
 function setBusy(v){ busy.style.display = v ? 'flex':'none'; btns.forEach(b=>b.disabled=v); }
 function toast(msg, ok=true){
   const t = document.createElement('div'); t.className = 't '+(ok?'ok':'err'); t.textContent = msg;
@@ -161,8 +222,166 @@ function toast(msg, ok=true){
 }
 async function API(path,opts={}){
   opts.headers = Object.assign({'Content-Type':'application/json'}, AUTH, opts.headers||{});
-  const r = await fetch(path, opts); if(!r.ok){ throw new Error('HTTP '+r.status); }
-  return r.json();
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let data = {};
+  if(text){
+    try{ data = JSON.parse(text); }
+    catch{ data = {raw:text}; }
+  }
+  if(!r.ok){
+    const msg = (data && data.error) ? data.error : ('HTTP '+r.status);
+    const err = new Error(msg);
+    err.status = r.status;
+    err.payload = data;
+    throw err;
+  }
+  return data;
+}
+
+function joinPath(dir,name){
+  if(!dir) return name;
+  return dir.replace(/\\/g,'/').replace(/\/+$/,'') + '/' + name;
+}
+
+function displayPath(path){
+  const clean = path ? path.replace(/\\/g,'/') : '';
+  return '/' + clean;
+}
+
+function formatSize(size){
+  if(size === null || size === undefined) return '';
+  if(size < 1024) return size + ' B';
+  if(size < 1024 * 1024) return (size/1024).toFixed(1) + ' KB';
+  return (size/1048576).toFixed(1) + ' MB';
+}
+
+function confirmDiscard(){
+  if(!fileDirty) return true;
+  return confirm('You have unsaved changes. Discard them?');
+}
+
+function resetEditor(message){
+  currentFile = '';
+  fileNameEl.textContent = 'Select a text file to view/edit';
+  fileContentEl.value = '';
+  fileContentEl.disabled = true;
+  fileContentEl.style.display = 'none';
+  fileEmptyEl.style.display = 'block';
+  fileEmptyEl.textContent = message || defaultFileMessage;
+  markDirty(false);
+}
+
+function setFileBusy(v){
+  fsLoading = v;
+  reloadFilesBtn.disabled = v;
+  fileListEl.style.opacity = v ? 0.6 : 1;
+  fileListEl.style.pointerEvents = v ? 'none' : 'auto';
+  saveFileBtn.disabled = v || !currentFile || !fileDirty;
+}
+
+function markDirty(v){
+  fileDirty = v;
+  saveFileBtn.disabled = fsLoading || !currentFile || !fileDirty;
+}
+
+function renderFileList(data){
+  currentDir = data.path || '';
+  filePathEl.textContent = displayPath(currentDir);
+  fileListEl.innerHTML = '';
+
+  if(data.parent !== null && data.parent !== undefined){
+    const up = document.createElement('div');
+    up.className = 'file-row dir';
+    const strong = document.createElement('strong');
+    strong.textContent = '..';
+    up.appendChild(strong);
+    up.onclick = ()=>{ if(fsLoading) return; if(!confirmDiscard()) return; resetEditor(); loadDir(data.parent || ''); };
+    fileListEl.appendChild(up);
+  }
+
+  if(!data.entries || !data.entries.length){
+    const empty = document.createElement('div');
+    empty.className = 'file-empty';
+    empty.textContent = 'Folder is empty';
+    fileListEl.appendChild(empty);
+    return;
+  }
+
+  data.entries.forEach(entry=>{
+    const row = document.createElement('div');
+    row.className = 'file-row ' + (entry.is_dir?'dir':'file');
+    const strong = document.createElement('strong');
+    strong.textContent = entry.name;
+    row.appendChild(strong);
+    if(!entry.is_dir){
+      const size = document.createElement('span');
+      size.className = 'file-size';
+      size.textContent = formatSize(entry.size);
+      row.appendChild(size);
+    }
+
+    if(entry.is_dir){
+      row.onclick = ()=>{ if(fsLoading) return; if(!confirmDiscard()) return; resetEditor(); loadDir(joinPath(currentDir, entry.name)); };
+    }else{
+      const ext = entry.name.includes('.') ? entry.name.substring(entry.name.lastIndexOf('.')).toLowerCase() : '';
+      if(blockedExt.has(ext)){
+        row.classList.add('blocked');
+        row.onclick = ()=> toast('Binary files cannot be opened in the editor.', false);
+      }else{
+        row.onclick = ()=> openFile(joinPath(currentDir, entry.name), entry.name);
+      }
+    }
+
+    fileListEl.appendChild(row);
+  });
+}
+
+async function loadDir(path=''){
+  setFileBusy(true);
+  try{
+    const data = await API('/api/fs/list?path='+encodeURIComponent(path));
+    renderFileList(data);
+  }catch(e){
+    toast('File list failed: '+e.message, false);
+  }finally{
+    setFileBusy(false);
+  }
+}
+
+async function openFile(path, name){
+  if(fsLoading) return;
+  if(!confirmDiscard()) return;
+  setFileBusy(true);
+  try{
+    const data = await API('/api/fs/file?path='+encodeURIComponent(path));
+    currentFile = path;
+    fileNameEl.textContent = name;
+    fileContentEl.value = data.content || '';
+    fileContentEl.disabled = false;
+    fileContentEl.style.display = 'block';
+    fileEmptyEl.style.display = 'none';
+    markDirty(false);
+  }catch(e){
+    resetEditor('Unable to open file: '+e.message);
+    toast('Open failed: '+e.message, false);
+  }finally{
+    setFileBusy(false);
+  }
+}
+
+async function saveFile(){
+  if(!currentFile || fsLoading) return;
+  setFileBusy(true);
+  try{
+    await API('/api/fs/file', {method:'POST', body: JSON.stringify({path: currentFile, content: fileContentEl.value})});
+    markDirty(false);
+    toast('File saved successfully.');
+  }catch(e){
+    toast('Save failed: '+e.message, false);
+  }finally{
+    setFileBusy(false);
+  }
 }
 
 async function refreshStatus(){
@@ -227,6 +446,14 @@ $('#updateOxide').onclick = async ()=>{
 };
 
 $('#reloadLogs').onclick = ()=> startLogs();
+
+if(fileContentEl){
+  fileContentEl.addEventListener('input', ()=> markDirty(true));
+}
+saveFileBtn.onclick = ()=> saveFile();
+reloadFilesBtn.onclick = ()=>{ if(fsLoading) return; loadDir(currentDir); };
+resetEditor();
+loadDir();
 
 refreshStatus();
 startLogs();

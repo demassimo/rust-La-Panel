@@ -1,4 +1,5 @@
 import os, subprocess, contextlib
+from pathlib import Path
 from flask import Flask, Response, request, jsonify, render_template
 
 # === CONFIGURATION ===
@@ -10,6 +11,7 @@ STEAM_USER = os.environ.get("STEAM_USER", "steam")
 STEAM_HOME = os.environ.get("STEAM_HOME", f"/home/{STEAM_USER}")
 STEAMCMD = os.environ.get("STEAMCMD", f"{STEAM_HOME}/steamcmd/steamcmd.sh")
 RUST_DIR  = os.environ.get("RUST_DIR",  f"{STEAM_HOME}/rust-server")
+FILE_ROOT = Path(os.environ.get("PANEL_FILE_ROOT", RUST_DIR)).resolve()
 
 # --- Flask setup (define template path manually) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,10 +32,44 @@ def _run(cmd: list[str]):
     p = subprocess.run(cmd, capture_output=True, text=True)
     return p.returncode, (p.stdout or p.stderr or "").strip()
 
+def _safe_path(rel: str) -> Path:
+    """Return a safe absolute path within FILE_ROOT."""
+    candidate = (FILE_ROOT / rel).resolve()
+    if FILE_ROOT not in candidate.parents and candidate != FILE_ROOT:
+        raise ValueError("invalid path")
+    return candidate
+
+def _relative(path: Path) -> str:
+    rel = str(path.relative_to(FILE_ROOT))
+    return "" if rel == "." else rel
+
+def _list_entries(path: Path):
+    entries = []
+    with os.scandir(path) as it:
+        entries_iter = sorted(it, key=lambda e: (not e.is_dir(follow_symlinks=False), e.name.lower()))
+        for entry in entries_iter:
+            is_dir = entry.is_dir(follow_symlinks=False)
+            info = {
+                "name": entry.name,
+                "is_dir": is_dir,
+            }
+            if not is_dir and entry.is_file(follow_symlinks=False):
+                try:
+                    info["size"] = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    info["size"] = None
+            entries.append(info)
+    return entries
+
 # === ROUTES ===
 @app.route("/")
 def index():
-    return render_template("index.html", service=SERVICE, token_set=bool(AUTH_TOKEN))
+    return render_template(
+        "index.html",
+        service=SERVICE,
+        token_set=bool(AUTH_TOKEN),
+        file_root=str(FILE_ROOT),
+    )
 
 # --- Basic systemd control ---
 @app.get("/api/status")
@@ -99,6 +135,97 @@ def update_oxide():
 
     code, out = _run(["sudo", "/usr/local/bin/oxide_update.sh", url])
     return jsonify({"ok": code == 0, "exit": code, "output": out})
+
+# --- File manager ---
+BANNED_EXTS = {".dll", ".exe", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".svg",
+".dds", ".tga", ".psd", ".mp3", ".wav", ".ogg", ".flac", ".mp4", ".avi", ".mov", ".mkv", ".pak",
+".bin", ".dat"
+}
+
+@app.get("/api/fs/list")
+def fs_list():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    rel = request.args.get("path", "").strip()
+    try:
+        target = _safe_path(rel or ".")
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid path"}), 400
+
+    if not target.exists() or not target.is_dir():
+        return jsonify({"ok": False, "error": "not found"}), 404
+
+    try:
+        entries = _list_entries(target)
+    except OSError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    relative = _relative(target) if target != FILE_ROOT else ""
+    parent = _relative(target.parent) if target != FILE_ROOT else None
+    return jsonify({"ok": True, "path": relative, "parent": parent, "entries": entries})
+
+def _blocked_extension(path: Path) -> bool:
+    return path.suffix.lower() in BANNED_EXTS
+
+def _read_text_file(path: Path) -> str:
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+@app.get("/api/fs/file")
+def fs_get_file():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    rel = request.args.get("path", "").strip()
+    if not rel:
+        return jsonify({"ok": False, "error": "missing path"}), 400
+
+    try:
+        target = _safe_path(rel)
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid path"}), 400
+
+    if not target.exists() or not target.is_file():
+        return jsonify({"ok": False, "error": "not found"}), 404
+
+    if _blocked_extension(target):
+        return jsonify({"ok": False, "error": "binary file"}), 400
+
+    if target.stat().st_size > 2 * 1024 * 1024:  # 2 MB limit
+        return jsonify({"ok": False, "error": "file too large"}), 400
+
+    return jsonify({"ok": True, "content": _read_text_file(target)})
+
+@app.post("/api/fs/file")
+def fs_save_file():
+    if not _authorized(request):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    rel = data.get("path", "").strip()
+    content = data.get("content")
+
+    if not rel or content is None:
+        return jsonify({"ok": False, "error": "missing path or content"}), 400
+
+    try:
+        target = _safe_path(rel)
+    except ValueError:
+        return jsonify({"ok": False, "error": "invalid path"}), 400
+
+    if _blocked_extension(target):
+        return jsonify({"ok": False, "error": "binary file"}), 400
+
+    if not target.exists() or not target.is_file():
+        return jsonify({"ok": False, "error": "not found"}), 404
+
+    try:
+        with target.open("w", encoding="utf-8") as fh:
+            fh.write(content)
+    except OSError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify({"ok": True})
 
 # === RUN ===
 if __name__ == "__main__":
