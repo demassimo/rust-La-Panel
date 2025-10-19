@@ -21,74 +21,42 @@ You can change these in the helper scripts under `scripts/`, via the new web con
 
 ## Install
 
-### 1) Create the helper scripts (as root)
+### Automated Ubuntu install (recommended)
+
+Run the interactive installer as root. It will ask for the panel service user,
+Rust service name, Steam account paths, and the initial web login credentials.
+The script enables the multiverse repository, installs SteamCMD and the 32-bit
+runtime libraries it needs, installs the required Python packages system-wide,
+copies the web application into `/opt/rust-panel/app` (by default), configures
+sudo rules for the panel user, installs the helper scripts into
+`/usr/local/bin`, and enables a `systemd` service so the panel starts
+automatically.
+
 ```
-install -Dm755 scripts/rust_install.sh /usr/local/bin/rust_install.sh
-install -Dm755 scripts/rust_update.sh /usr/local/bin/rust_update.sh
-install -Dm755 scripts/oxide_update.sh /usr/local/bin/oxide_update.sh
+sudo ./scripts/install_panel.sh
 ```
 
-### 2) Sudoers (limit panel privileges)
-Allow the `rustpanel` service user to run just these commands without a password:
-```
-/etc/sudoers.d/rustpanel
----------------------------------------
-rustpanel ALL=NOPASSWD: /bin/systemctl start rust-server
-rustpanel ALL=NOPASSWD: /bin/systemctl stop rust-server
-rustpanel ALL=NOPASSWD: /bin/systemctl restart rust-server
-rustpanel ALL=NOPASSWD: /bin/systemctl status rust-server
-rustpanel ALL=NOPASSWD: /bin/journalctl -u rust-server
-rustpanel ALL=NOPASSWD: /usr/local/bin/rust_install.sh
-rustpanel ALL=NOPASSWD: /usr/local/bin/rust_update.sh
-rustpanel ALL=NOPASSWD: /usr/local/bin/oxide_update.sh *
----------------------------------------
-```
+After the prompts complete you can visit the panel on port 8080 immediately.
+All environment settings are stored in `/etc/rust-panel/panel.env`; edit that
+file and restart the `rustpanel` service if you ever need to change the
+defaults.
 
-> The `*` after `oxide_update.sh` allows passing a single URL argument.
+### Manual install (advanced)
 
-### 3) Python app
-Deploy `app.py` and `templates/index.html` to e.g. `/home/rustpanel/rust-panel/`.
-Create a venv and install Flask:
-```
-sudo -u rustpanel bash -lc '
-  cd ~/rust-panel
-  python3 -m venv ../venv
-  ../venv/bin/pip install --upgrade pip Flask
-'
-```
+If you would like to perform the setup yourself, follow the high level steps
+below as a reference:
 
-### 4) Systemd unit for the panel
-```
-/etc/systemd/system/rustpanel.service
----------------------------------------
-[Unit]
-Description=Flask Rust Panel
-After=network.target
+1. Copy the helper scripts from `scripts/` into `/usr/local/bin` and make them
+   executable.
+2. Grant the panel service user password-less sudo access to the helper scripts
+   and to the `systemctl`/`journalctl` commands for your Rust server unit.
+3. Deploy the Flask app somewhere (for example `/opt/rust-panel/app.py` and the
+   `templates/` directory) and install the Python dependencies globally.
+4. Create a `systemd` unit that launches `/usr/bin/python3 /path/to/app.py` with
+   the appropriate environment variables for credentials and paths.
+5. Enable and start the unit.
 
-[Service]
-User=rustpanel
-WorkingDirectory=/home/rustpanel/rust-panel
-Environment=RUST_SERVICE=rust-server
-# Optional: override login credentials (defaults admin/rustpanel)
-# Environment=RUSTPANEL_USER=rustpanel
-# Environment=RUSTPANEL_PASSWORD=ChangeMeNow
-# Or provide a pre-hashed password (pbkdf2:sha256)
-# Environment=RUSTPANEL_PASSWORD_HASH=...
-# Optional auth token for API callers (still works in addition to UI login)
-# Environment=RUSTPANEL_TOKEN=YourStrongTokenHere
-ExecStart=/home/rustpanel/venv/bin/python /home/rustpanel/rust-panel/app.py
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
----------------------------------------
-```
-Enable:
-```
-systemctl daemon-reload
-systemctl enable --now rustpanel
-```
+The automated installer performs these steps for you using safe defaults.
 
 ## Using the panel
 - Visit: `http://<container-ip>:8080`
