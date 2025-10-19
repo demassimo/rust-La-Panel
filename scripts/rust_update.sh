@@ -25,5 +25,5 @@ mkdir -p "${INSTALL_DIR}"
 chown -R "${STEAM_USER}:${STEAM_USER}" "${INSTALL_DIR}"
 
 echo "Updating Rust server with SteamCMD ..."
-sudo -u "${STEAM_USER}" bash -lc ""${STEAMCMD}" +login anonymous +force_install_dir \"${INSTALL_DIR}\" +app_update 258550 validate +quit"
+sudo -u "${STEAM_USER}" bash -lc "\"${STEAMCMD}\" +login anonymous +force_install_dir \"${INSTALL_DIR}\" +app_update 258550 validate +quit"
 echo "Done."
